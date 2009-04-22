@@ -5,7 +5,7 @@ author:
 build_requires:
   Test::More: 0
 distribution_type: module
-generated_by: 'Module::Install version 0.77'
+generated_by: 'Module::Install version 0.79'
 license: gpl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -19,11 +19,11 @@ no_index:
 provides:
   Data::Transform::SSL:
     file: lib/Data/Transform/SSL.pm
-    version: 0.01
+    version: 0.02
 requires:
   Carp: 0
   Data::Transform: 0.05_01
   Net::SSLeay: 1.30
   POE: 0
   perl: 5.6.0
-version: 0.01
+version: 0.02

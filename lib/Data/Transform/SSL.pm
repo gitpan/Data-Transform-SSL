@@ -17,7 +17,7 @@ differences and additions are documented here.
 
 use base qw(Data::Transform);
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
@@ -27,16 +27,17 @@ Net::SSLeay::ERR_load_crypto_strings;
 Net::SSLeay::SSLeay_add_ssl_algorithms();
 Net::SSLeay::randomize();
 
-sub BUF    () { 0 }
-sub CTX    () { 1 }
-sub SSL    () { 2 }
-sub RB     () { 3 }
-sub WB     () { 4 }
-sub STATE  () { 5 }
-sub KEY    () { 6 }
-sub CERT   () { 7 }
-sub TYPE   () { 8 }
-sub OUTBUF () { 9 }
+sub BUF    () {  0 }
+sub CTX    () {  1 }
+sub SSL    () {  2 }
+sub RB     () {  3 }
+sub WB     () {  4 }
+sub STATE  () {  5 }
+sub KEY    () {  6 }
+sub CERT   () {  7 }
+sub TYPE   () {  8 }
+sub OUTBUF () {  9 }
+sub FLAGS  () { 10 }
 
 sub STATE_DISC ()     { 0 }
 sub STATE_CONN ()     { 1 }
@@ -50,18 +51,55 @@ sub TYPE_CLIENT () { 1 }
 sub SSL_SENT_SHUTDOWN     () { 1 }
 sub SSL_RECEIVED_SHUTDOWN () { 2 }
 
+# from openssl/x509_vfy.h
+sub X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT () { 18 }
+
+sub FLAGS_ALLOW_SELFSIGNED () { 0x00000001 }
+
 sub _init {
    my ($self) = @_;
 
+   my %args = ();
+   if ($self->[TYPE] == TYPE_CLIENT) {
+      # don't reference $self, so there isn't an extra reference keeping
+      # it alive too long
+      my $flags = $self->[FLAGS];
+      $args{SSL_verify_callback} = sub {
+         my ($ok, $ctx_store) = @_;
+            my $cert = Net::SSLeay::X509_STORE_CTX_get_current_cert($ctx_store);
+	    my $error = Net::SSLeay::X509_STORE_CTX_get_error($ctx_store);
+            warn Net::SSLeay::X509_verify_cert_error_string($error);
+            my $issuer = Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_issuer_name($cert)); 
+            my $subject = Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_subject_name($cert));
+            return 1
+               if ($error == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT and $flags & FLAGS_ALLOW_SELFSIGNED);
+         return $ok;
+      };
+   }
    my $ctx = Net::SSLeay::CTX_new
       or die_now("Failed to create SSL_CTX $!");
+   Net::SSLeay::CTX_set_options($ctx, Net::SSLeay::OP_ALL())
+      and die_if_ssl_error("Failed to set compatibility options");
+
    if ($self->[TYPE] == TYPE_SERVER) {
       Net::SSLeay::CTX_set_cipher_list($ctx, 'ALL');
       Net::SSLeay::set_cert_and_key($ctx,
             $self->[CERT],
             $self->[KEY],
          ) or die "key $!";
+   } else {
+      Net::SSLeay::CTX_load_verify_locations($ctx, '', '/etc/ssl/certs/');
+      Net::SSLeay::CTX_set_verify($ctx, Net::SSLeay::VERIFY_PEER(), $args{SSL_verify_callback});
    }
+   # enable revocation checking
+   # FIXME figure out how to do this only when we have a CRL because
+   # certificate verifying returns an error if there isn't one.
+#   my $store = Net::SSLeay::CTX_get_cert_store($ctx);
+#   my $flag = Net::SSLeay::X509_V_FLAG_CRL_CHECK();
+#   Net::SSLeay::X509_STORE_set_flags(
+#     Net::SSLeay::CTX_get_cert_store($ctx),
+#     Net::SSLeay::X509_V_FLAG_CRL_CHECK(),
+#   );
    my $ssl = Net::SSLeay::new($ctx)
       or die_now("Failed to create SSL $!");
    if ($self->[TYPE] == TYPE_SERVER) {
@@ -120,6 +158,7 @@ sub new {
       if ($self->[TYPE] == TYPE_SERVER and not defined $self->[KEY]);
 
    $self->[BUF] = [];
+   $self->[FLAGS] = $opts{flags} ? $opts{flags} : 0;
 
    return $self->_init;
 }
@@ -132,6 +171,7 @@ sub clone {
    $new_self->[BUF] = [ ];
    $new_self->[CERT] = $self->[CERT];
    $new_self->[KEY] = $self->[KEY];
+   $new_self->[FLAGS] = $self->[FLAGS];
    return $new_self->_init;
 }
 
@@ -156,7 +196,7 @@ sub _try_connection {
 	    # I think that will not happen since we write to a
 	    # memory buffer, which should always work. So assume
             # it is an actual error and return its description
-            # FIXME: probably check for ERROR_WANT_WRITE anyway
+            # FIXME probably check for ERROR_WANT_WRITE anyway
             my $str;
             while (my $e = Net::SSLeay::ERR_get_error) {
                $str .= Net::SSLeay::ERR_error_string($e) . "\n";
@@ -199,7 +239,7 @@ sub _handle_get_data {
    } elsif ($self->[STATE] == STATE_CONN) {
       my $got = Net::SSLeay::read($self->[SSL]);
       my $shutdown = Net::SSLeay::get_shutdown($self->[SSL]);
-      if ($shutdown == SSL_RECEIVED_SHUTDOWN) {
+      if ($shutdown == SSL_RECEIVED_SHUTDOWN()) {
          Net::SSLeay::shutdown($self->[SSL]);
          my $notify = Net::SSLeay::BIO_read($self->[WB]);
          my $ret = Data::Transform::Meta::SENDBACK->new($notify);
@@ -208,7 +248,6 @@ sub _handle_get_data {
       }
       return $got if (defined $got);
    } elsif ($self->[STATE] == STATE_SHUTDOWN) {
-      warn "FOO";
       #my $ret Data::Transform::Meta::EOF->new;
       #return $ret;
    }
@@ -221,7 +260,7 @@ sub _handle_put_meta {
    if ($meta->isa('Data::Transform::Meta::EOF')) {
       my $rv = Net::SSLeay::shutdown($self->[SSL]);
       my $shutdown = Net::SSLeay::get_shutdown($self->[SSL]);
-      if ($shutdown == SSL_SENT_SHUTDOWN) {
+      if ($shutdown == SSL_SENT_SHUTDOWN()) {
       }
       my $notify = Net::SSLeay::BIO_read($self->[WB]);
       $self->[STATE] = STATE_SHUTDOWN;
