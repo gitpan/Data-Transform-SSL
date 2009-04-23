@@ -17,7 +17,7 @@ differences and additions are documented here.
 
 use base qw(Data::Transform);
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use Carp qw(croak);
 use Scalar::Util qw(blessed);

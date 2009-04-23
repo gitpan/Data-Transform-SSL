@@ -7,7 +7,7 @@ plan tests => 13;
 
 use_ok('Data::Transform::SSL');
 
-my $client = Data::Transform::SSL->new;
+my $client = Data::Transform::SSL->new(flags => Data::Transform::SSL::FLAGS_ALLOW_SELFSIGNED());
 my $server = Data::Transform::SSL->new(type => 'Server', key => 't/key.pem', cert => 't/cert.pem');
 
 my $data = ["this line has to reach the other end"];
@@ -17,6 +17,7 @@ is(@$client_data, 1, "... got a single chunk of data from the filter");
 
 my $loop = 0;
 while (1) {
+        BAIL_OUT("uh oh, seems like we're in an infinite loop") if ($loop > 100);
         $loop++;
 	my $server_data = $server->get($client_data);
 	if (blessed ($server_data->[0])) {
@@ -41,6 +42,7 @@ is(@$server_data, 1, "... got a single chunk of data from the filter");
 $loop = 0;
 
 while (1) {
+        BAIL_OUT("uh oh, seems like we're in an infinite loop") if ($loop > 100);
         $loop++;
 	my $client_data = $client->get($server_data);
 	if (blessed ($client_data->[0])) {
